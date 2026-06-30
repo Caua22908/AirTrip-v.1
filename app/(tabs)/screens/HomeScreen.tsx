@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -7,13 +7,54 @@ import {
   ScrollView,
   TouchableOpacity,
   Dimensions,
+  Modal,
+  Alert,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons, FontAwesome5 } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
+import { TextInput, Button } from 'react-native-paper';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width, height } = Dimensions.get('window');
 
 export default function HomeScreen() {
+  const navigation = useNavigation();
+  const [showNewsletterModal, setShowNewsletterModal] = useState(false);
+  const [newsletterEmail, setNewsletterEmail] = useState('');
+  const [subLoading, setSubLoading] = useState(false);
+
+  const isEmailValid = (email: string) => {
+    return /^\S+@\S+\.\S+$/.test(email);
+  };
+
+  const handleSubscribe = async () => {
+    if (!newsletterEmail.trim()) {
+      Alert.alert('Erro', 'Por favor, insira seu e-mail.');
+      return;
+    }
+    if (!isEmailValid(newsletterEmail)) {
+      Alert.alert('Erro', 'E-mail inválido.');
+      return;
+    }
+
+    try {
+      setSubLoading(true);
+      const key = 'newsletterEmails';
+      const raw = await AsyncStorage.getItem(key);
+      const list = raw ? JSON.parse(raw) : [];
+      if (!list.includes(newsletterEmail)) list.push(newsletterEmail);
+      await AsyncStorage.setItem(key, JSON.stringify(list));
+      setSubLoading(false);
+      setShowNewsletterModal(false);
+      setNewsletterEmail('');
+      Alert.alert('Sucesso', 'E-mail cadastrado para receber ofertas.');
+    } catch (err) {
+      setSubLoading(false);
+      console.error('Erro ao salvar e-mail:', err);
+      Alert.alert('Erro', 'Não foi possível salvar seu e-mail. Tente novamente.');
+    }
+  };
   return (
     <LinearGradient
       colors={['#1a0d8d', '#2d1a9f', '#3d25b0']}
@@ -29,14 +70,7 @@ export default function HomeScreen() {
           <Text style={styles.brandName}>AirTrip</Text>
           <Text style={styles.tagline}>Suas Jornadas, Nosso Compromisso</Text>
 
-          <LinearGradient
-            colors={['#00d4ff', '#4a4fa0']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.ctaButton}
-          >
-            <Text style={styles.ctaButtonText}>✈️ Comece Sua Viagem</Text>
-          </LinearGradient>
+          {/* botão principal removido */}
         </View>
 
         {/* Estatísticas */}
@@ -117,47 +151,98 @@ export default function HomeScreen() {
         <View style={styles.offersSection}>
           <Text style={styles.sectionTitle}>Ofertas Imperdíveis</Text>
 
-          <View style={styles.offerCard}>
-            <Image
-              source={require('../../../assets/images/p1.png')}
-              style={styles.offerImage}
-            />
-            <LinearGradient
-              colors={['transparent', 'rgba(26, 13, 141, 0.9)']}
-              style={styles.offerOverlay}
-            >
-              <Text style={styles.offerTitle}>São Paulo → Rio de Janeiro</Text>
-              <Text style={styles.offerPrice}>a partir de R$ 189,00</Text>
-            </LinearGradient>
-          </View>
+          <TouchableOpacity
+            activeOpacity={0.9}
+            onPress={() => {
+              Alert.alert(
+                'Oferta',
+                'Deseja ver detalhes dessa oferta?',
+                [
+                  { text: 'Cancelar', style: 'cancel' },
+                  {
+                    text: 'Ver Oferta',
+                    onPress: () => navigation.navigate('Buscar Voos' as never),
+                  },
+                ]
+              );
+            }}
+          >
+            <View style={styles.offerCard}>
+              <Image
+                source={require('../../../assets/images/p1.png')}
+                style={styles.offerImage}
+              />
+              <LinearGradient
+                colors={['transparent', 'rgba(26, 13, 141, 0.9)']}
+                style={styles.offerOverlay}
+              >
+                <Text style={styles.offerTitle}>São Paulo → Rio de Janeiro</Text>
+                <Text style={styles.offerPrice}>a partir de R$ 189,00</Text>
+              </LinearGradient>
+            </View>
+          </TouchableOpacity>
 
-          <View style={styles.offerCard}>
-            <Image
-              source={require('../../../assets/images/p2.png')}
-              style={styles.offerImage}
-            />
-            <LinearGradient
-              colors={['transparent', 'rgba(26, 13, 141, 0.9)']}
-              style={styles.offerOverlay}
-            >
-              <Text style={styles.offerTitle}>Brasília → Salvador</Text>
-              <Text style={styles.offerPrice}>a partir de R$ 245,00</Text>
-            </LinearGradient>
-          </View>
+          <TouchableOpacity
+            activeOpacity={0.9}
+            onPress={() => {
+              Alert.alert(
+                'Oferta',
+                'Deseja ver detalhes dessa oferta?',
+                [
+                  { text: 'Cancelar', style: 'cancel' },
+                  {
+                    text: 'Ver Oferta',
+                    onPress: () => navigation.navigate('Buscar Voos' as never),
+                  },
+                ]
+              );
+            }}
+          >
+            <View style={styles.offerCard}>
+              <Image
+                source={require('../../../assets/images/p2.png')}
+                style={styles.offerImage}
+              />
+              <LinearGradient
+                colors={['transparent', 'rgba(26, 13, 141, 0.9)']}
+                style={styles.offerOverlay}
+              >
+                <Text style={styles.offerTitle}>Brasília → Salvador</Text>
+                <Text style={styles.offerPrice}>a partir de R$ 245,00</Text>
+              </LinearGradient>
+            </View>
+          </TouchableOpacity>
 
-          <View style={styles.offerCard}>
-            <Image
-              source={require('../../../assets/images/p3.png')}
-              style={styles.offerImage}
-            />
-            <LinearGradient
-              colors={['transparent', 'rgba(26, 13, 141, 0.9)']}
-              style={styles.offerOverlay}
-            >
-              <Text style={styles.offerTitle}>Curitiba → Manaus</Text>
-              <Text style={styles.offerPrice}>a partir de R$ 320,00</Text>
-            </LinearGradient>
-          </View>
+          <TouchableOpacity
+            activeOpacity={0.9}
+            onPress={() => {
+              Alert.alert(
+                'Oferta',
+                'Deseja ver detalhes dessa oferta?',
+                [
+                  { text: 'Cancelar', style: 'cancel' },
+                  {
+                    text: 'Ver Oferta',
+                    onPress: () => navigation.navigate('Buscar Voos' as never),
+                  },
+                ]
+              );
+            }}
+          >
+            <View style={styles.offerCard}>
+              <Image
+                source={require('../../../assets/images/p3.png')}
+                style={styles.offerImage}
+              />
+              <LinearGradient
+                colors={['transparent', 'rgba(26, 13, 141, 0.9)']}
+                style={styles.offerOverlay}
+              >
+                <Text style={styles.offerTitle}>Curitiba → Manaus</Text>
+                <Text style={styles.offerPrice}>a partir de R$ 320,00</Text>
+              </LinearGradient>
+            </View>
+          </TouchableOpacity>
         </View>
 
         {/* Newsletter */}
@@ -166,16 +251,66 @@ export default function HomeScreen() {
           <Text style={styles.newsletterSubtitle}>
             Inscreva-se e receba descontos exclusivos direto no seu email
           </Text>
-          <LinearGradient
-            colors={['#00d4ff', '#4a4fa0']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.newsletterButton}
-          >
-            <Text style={styles.newsletterButtonText}>Inscrever-se Agora</Text>
-          </LinearGradient>
+          <TouchableOpacity onPress={() => setShowNewsletterModal(true)}>
+            <LinearGradient
+              colors={['#00d4ff', '#4a4fa0']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.newsletterButton}
+            >
+              <Text style={styles.newsletterButtonText}>Inscrever-se Agora</Text>
+            </LinearGradient>
+          </TouchableOpacity>
         </View>
       </ScrollView>
+
+      <Modal
+        visible={showNewsletterModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowNewsletterModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <LinearGradient
+              colors={["#00d4ff", "#4a4fa0"]}
+              style={styles.modalHeader}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+            >
+              <View style={styles.modalIconCircle}>
+                <MaterialIcons name="local-offer" size={28} color="#0d0620" />
+              </View>
+            </LinearGradient>
+            <Text style={styles.modalTitle}>Receba nossas melhores ofertas</Text>
+            <TextInput
+              mode="outlined"
+              label="Seu e-mail"
+              value={newsletterEmail}
+              onChangeText={setNewsletterEmail}
+              style={styles.modalInput}
+              keyboardType="email-address"
+              autoCapitalize="none"
+            />
+            <View style={styles.modalActions}>
+              <Button
+                mode="outlined"
+                onPress={() => setShowNewsletterModal(false)}
+                style={styles.modalCancel}
+                textColor="#00d4ff"
+              >
+                Cancelar
+              </Button>
+              <TouchableOpacity style={styles.modalButtonTouchable} onPress={handleSubscribe} activeOpacity={0.9}>
+                <LinearGradient colors={["#00d4ff","#4a4fa0"]} style={styles.modalButtonGradient}>
+                  <Text style={styles.modalButtonText}>{subLoading ? 'Enviando...' : 'Receber Ofertas'}</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
     </LinearGradient>
   );
 }
@@ -365,5 +500,75 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
     textAlign: 'center',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    width: '100%',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderRadius: 16,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(0,212,255,0.15)',
+  },
+  modalTitle: {
+    fontSize: 18,
+    color: '#fff',
+    fontWeight: 'bold',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  modalInput: {
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    marginBottom: 14,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  modalButton: {
+    flex: 1,
+    borderRadius: 12,
+  },
+  modalCancel: {
+    flex: 1,
+    marginRight: 8,
+  },
+  modalHeader: {
+    width: 68,
+    height: 68,
+    alignSelf: 'center',
+    borderRadius: 36,
+    marginTop: -44,
+    marginBottom: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 6,
+  },
+  modalIconCircle: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalButtonTouchable: {
+    flex: 1,
+  },
+  modalButtonGradient: {
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  modalButtonText: {
+    color: '#0d0620',
+    fontWeight: '700',
   },
 });

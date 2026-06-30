@@ -17,6 +17,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { Calendar } from 'react-native-calendars';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 
@@ -127,6 +128,9 @@ export default function SearchFlightsScreen() {
   const [showReturnPicker, setShowReturnPicker] = useState(false);
   const [showAirportModal, setShowAirportModal] = useState(false);
   const [airportModalType, setAirportModalType] = useState('departure');
+  const [showCalendarModal, setShowCalendarModal] = useState(false);
+  const [calendarMode, setCalendarMode] = useState<'departure' | 'return' | 'range'>('departure');
+  const [calendarSelection, setCalendarSelection] = useState<{ start?: Date | null; end?: Date | null }>({ start: departureDate, end: returnDate });
   const [searchQuery, setSearchQuery] = useState('');
   
   // Estados para API
@@ -134,6 +138,7 @@ export default function SearchFlightsScreen() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [flights, setFlights] = useState<FlightResult[]>([]);
   const [showResults, setShowResults] = useState(false);
+  const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
   
   // Estados de paginação
   const [currentPage, setCurrentPage] = useState(1);
@@ -155,7 +160,7 @@ export default function SearchFlightsScreen() {
 
   // Sua chave API - AviationStack
   const API_KEY = 'a2d0dcf6a549d01b4c120b13080078ba';
-  const API_URL = 'http://api.aviationstack.com/v1/flights';
+  const API_URL = 'https://api.aviationstack.com/v1/flights';
 
   // Carregar voos agendados ao iniciar
   useEffect(() => {
@@ -386,6 +391,7 @@ const scheduleNotification = async (flight: ScheduledFlight) => {
     } else {
       setLoading(true);
       setShowResults(false);
+      setFeedbackMessage(null);
       setFlights([]);
       setCurrentPage(1);
     }
@@ -399,18 +405,26 @@ const scheduleNotification = async (flight: ScheduledFlight) => {
       console.log(`🌐 Buscando voos - Página ${page}:`, url);
 
       const response = await fetch(url);
+
+      if (!response.ok) {
+        throw new Error(`Erro na API: ${response.status} ${response.statusText}`);
+      }
+
       const data: ApiResponse = await response.json();
 
       console.log(`📦 Resposta da API (Página ${page}):`, JSON.stringify(data).substring(0, 500) + '...');
 
       if (data.error) {
-        Alert.alert('Erro na API', data.error.message || 'Erro ao buscar voos');
+        const apiMessage = data.error.message || 'Erro ao buscar voos';
+        setFeedbackMessage(`Não foi possível carregar os voos no momento. ${apiMessage}`);
+        Alert.alert('Erro na API', apiMessage);
         setLoading(false);
         setLoadingMore(false);
         return;
       }
 
       if (data.data && data.data.length > 0) {
+        setFeedbackMessage(null);
         if (isLoadMore) {
           setFlights(prev => [...prev, ...data.data]);
         } else {
@@ -432,9 +446,11 @@ const scheduleNotification = async (flight: ScheduledFlight) => {
           return;
         }
         
+        const noResultsMessage = `Não encontramos voos de ${departure.code} para ${arrival.code} na data ${formatDate(departureDate)}. Tente outra data ou uma rota diferente.`;
+        setFeedbackMessage(noResultsMessage);
         Alert.alert(
           'Nenhum voo encontrado', 
-          `Não encontramos voos de ${departure.code} para ${arrival.code} na data ${formatDate(departureDate)}.\n\n💡 Dicas:\n• Tente outra data\n• Verifique os códigos dos aeroportos\n• Tente uma rota diferente`,
+          `${noResultsMessage}\n\n💡 Dicas:\n• Tente outra data\n• Verifique os códigos dos aeroportos\n• Tente uma rota diferente`,
           [{ text: 'OK' }]
         );
         setFlights([]);
@@ -445,6 +461,7 @@ const scheduleNotification = async (flight: ScheduledFlight) => {
       }
     } catch (error) {
       console.error('❌ Erro na busca:', error);
+      setFeedbackMessage('Não foi possível conectar ao servidor. Verifique sua conexão com a internet e tente novamente.');
       Alert.alert(
         'Erro de Conexão', 
         'Não foi possível conectar ao servidor. Verifique sua conexão com a internet e tente novamente.'
@@ -495,6 +512,46 @@ const scheduleNotification = async (flight: ScheduledFlight) => {
     } catch {
       return dateString;
     }
+  };
+
+  const formatKey = (date: Date) => {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+
+  const createMarkedDates = (start?: Date | null, end?: Date | null) => {
+    const marks: any = {};
+    if (!start && !end) return marks;
+
+    if (start && !end) {
+      marks[formatKey(start)] = { startingDay: true, endingDay: true, color: '#00d4ff', textColor: '#0d0620' };
+      return marks;
+    }
+
+    // both present, ensure start <= end
+    let s = start as Date;
+    let e = end as Date;
+    if (s > e) {
+      const tmp = s; s = e; e = tmp;
+    }
+
+    const curr = new Date(s.getTime());
+    while (curr <= e) {
+      const key = formatKey(curr);
+      const isStart = curr.getTime() === s.getTime();
+      const isEnd = curr.getTime() === e.getTime();
+      marks[key] = {
+        color: '#00d4ff',
+        textColor: '#0d0620',
+        startingDay: isStart,
+        endingDay: isEnd,
+      };
+      curr.setDate(curr.getDate() + 1);
+    }
+
+    return marks;
   };
 
   const getFlightStatus = (status: string) => {
@@ -754,18 +811,35 @@ const scheduleNotification = async (flight: ScheduledFlight) => {
   };
 
   const handleDateChange = (event: any, selectedDate: any, type: any) => {
+    // Detecta se a seleção foi confirmada (Android usa event.type)
+    const confirmed = Platform.OS === 'android' ? event?.type === 'set' : true;
+
     if (type === 'departure') {
       setShowDeparturePicker(false);
-      if (selectedDate) setDepartureDate(selectedDate);
+      if (confirmed && selectedDate) {
+        setDepartureDate(selectedDate);
+        // Garantir que a volta não fique antes da ida
+        if (returnDate && selectedDate > returnDate) {
+          const nextDay = new Date(selectedDate.getTime() + 24 * 60 * 60 * 1000);
+          setReturnDate(nextDay);
+        }
+      }
     } else if (type === 'return') {
       setShowReturnPicker(false);
-      if (selectedDate) setReturnDate(selectedDate);
+      if (confirmed && selectedDate) {
+        // Não permitir selecionar volta anterior à ida
+        if (selectedDate < departureDate) {
+          Alert.alert('Data inválida', 'A data de volta não pode ser anterior à data de ida.');
+          return;
+        }
+        setReturnDate(selectedDate);
+      }
     } else if (type === 'scheduleDate') {
       setShowScheduleDatePicker(false);
-      if (selectedDate) setNotificationDate(selectedDate);
+      if (confirmed && selectedDate) setNotificationDate(selectedDate);
     } else if (type === 'scheduleTime') {
       setShowScheduleTimePicker(false);
-      if (selectedDate) setNotificationTime(selectedDate);
+      if (confirmed && selectedDate) setNotificationTime(selectedDate);
     }
   };
 
@@ -897,7 +971,7 @@ const scheduleNotification = async (flight: ScheduledFlight) => {
               <Text style={styles.label}>Ida</Text>
               <TouchableOpacity
                 style={styles.dateInput}
-                onPress={() => setShowDeparturePicker(true)}
+                onPress={() => { setCalendarMode('departure'); setCalendarSelection({ start: departureDate, end: returnDate }); setShowCalendarModal(true); }}
               >
                 <MaterialIcons name="calendar-today" size={18} color="#00d4ff" />
                 <Text style={styles.dateInputText}>{formatDate(departureDate)}</Text>
@@ -909,7 +983,7 @@ const scheduleNotification = async (flight: ScheduledFlight) => {
                 <Text style={styles.label}>Volta</Text>
                 <TouchableOpacity
                   style={styles.dateInput}
-                  onPress={() => setShowReturnPicker(true)}
+                  onPress={() => { setCalendarMode('return'); setCalendarSelection({ start: departureDate, end: returnDate }); setShowCalendarModal(true); }}
                 >
                   <MaterialIcons name="calendar-today" size={18} color="#00d4ff" />
                   <Text style={styles.dateInputText}>{formatDate(returnDate)}</Text>
@@ -917,6 +991,80 @@ const scheduleNotification = async (flight: ScheduledFlight) => {
               </View>
             )}
           </View>
+
+          <Modal
+            visible={showCalendarModal}
+            animationType="slide"
+            transparent={true}
+            onRequestClose={() => setShowCalendarModal(false)}
+          >
+            <View style={styles.calendarOverlay}>
+              <View style={styles.calendarContainer}>
+                <View style={styles.calendarHeader}>
+                  <Text style={styles.calendarTitle}>Selecione a data</Text>
+                  <TouchableOpacity onPress={() => setShowCalendarModal(false)}>
+                    <MaterialIcons name="close" size={24} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+                <Calendar
+                  markingType={'period'}
+                  markedDates={createMarkedDates(calendarSelection.start, calendarSelection.end)}
+                  onDayPress={(day: any) => {
+                    const selected = new Date(day.timestamp);
+                    if (calendarMode === 'departure') {
+                      // set departure immediately and close
+                      setDepartureDate(selected);
+                      if (selected > returnDate) {
+                        const nextDay = new Date(selected.getTime() + 24 * 60 * 60 * 1000);
+                        setReturnDate(nextDay);
+                      }
+                      setShowCalendarModal(false);
+                    } else if (calendarMode === 'return') {
+                      if (selected < departureDate) {
+                        Alert.alert('Data inválida', 'A data de volta não pode ser anterior à data de ida.');
+                        return;
+                      }
+                      setReturnDate(selected);
+                      setShowCalendarModal(false);
+                    } else {
+                      // range selection
+                      if (!calendarSelection.start || (calendarSelection.start && calendarSelection.end)) {
+                        setCalendarSelection({ start: selected, end: null });
+                      } else if (calendarSelection.start && !calendarSelection.end) {
+                        if (selected < calendarSelection.start) {
+                          setCalendarSelection({ start: selected, end: calendarSelection.start });
+                        } else {
+                          setCalendarSelection({ start: calendarSelection.start, end: selected });
+                        }
+                      }
+                    }
+                  }}
+                />
+
+                {calendarMode === 'range' && (
+                  <View style={styles.calendarActions}>
+                    <TouchableOpacity style={styles.calendarActionButton} onPress={() => setShowCalendarModal(false)}>
+                      <Text style={styles.calendarActionText}>Cancelar</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.calendarActionButton, styles.calendarActionConfirm]}
+                      onPress={() => {
+                        if (calendarSelection.start && calendarSelection.end) {
+                          setDepartureDate(calendarSelection.start);
+                          setReturnDate(calendarSelection.end);
+                          setShowCalendarModal(false);
+                        } else {
+                          Alert.alert('Seleção incompleta', 'Selecione uma data de ida e outra de volta.');
+                        }
+                      }}
+                    >
+                      <Text style={[styles.calendarActionText, { color: '#fff' }]}>Confirmar</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </View>
+            </View>
+          </Modal>
 
           <View style={styles.formGroup}>
             <Text style={styles.label}>Passageiros</Text>
@@ -984,6 +1132,13 @@ const scheduleNotification = async (flight: ScheduledFlight) => {
 
         {!showResults && !loading && (
           <View style={styles.tipsSection}>
+            {feedbackMessage ? (
+              <View style={styles.feedbackCard}>
+                <MaterialIcons name="info-outline" size={20} color="#00d4ff" />
+                <Text style={styles.feedbackText}>{feedbackMessage}</Text>
+              </View>
+            ) : null}
+
             <Text style={styles.tipsTitle}>💡 Dicas para Economizar</Text>
 
             <View style={styles.tipCard}>
@@ -1173,46 +1328,46 @@ const scheduleNotification = async (flight: ScheduledFlight) => {
             </View>
           </View>
         </Modal>
-
-        {showDeparturePicker && (
-          <DateTimePicker
-            value={departureDate}
-            mode="date"
-            display="default"
-            onChange={(event, date) => handleDateChange(event, date, 'departure')}
-            minimumDate={new Date()}
-          />
-        )}
-
-        {showReturnPicker && (
-          <DateTimePicker
-            value={returnDate}
-            mode="date"
-            display="default"
-            onChange={(event, date) => handleDateChange(event, date, 'return')}
-            minimumDate={departureDate}
-          />
-        )}
-
-        {showScheduleDatePicker && (
-          <DateTimePicker
-            value={notificationDate}
-            mode="date"
-            display="default"
-            onChange={(event, date) => handleDateChange(event, date, 'scheduleDate')}
-            minimumDate={new Date()}
-          />
-        )}
-
-        {showScheduleTimePicker && (
-          <DateTimePicker
-            value={notificationTime}
-            mode="time"
-            display="default"
-            onChange={(event, date) => handleDateChange(event, date, 'scheduleTime')}
-          />
-        )}
       </ScrollView>
+
+      {showDeparturePicker && (
+        <DateTimePicker
+          value={departureDate}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(event, date) => handleDateChange(event, date, 'departure')}
+          minimumDate={new Date()}
+        />
+      )}
+
+      {showReturnPicker && (
+        <DateTimePicker
+          value={returnDate}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(event, date) => handleDateChange(event, date, 'return')}
+          minimumDate={departureDate}
+        />
+      )}
+
+      {showScheduleDatePicker && (
+        <DateTimePicker
+          value={notificationDate}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(event, date) => handleDateChange(event, date, 'scheduleDate')}
+          minimumDate={new Date()}
+        />
+      )}
+
+      {showScheduleTimePicker && (
+        <DateTimePicker
+          value={notificationTime}
+          mode="time"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(event, date) => handleDateChange(event, date, 'scheduleTime')}
+        />
+      )}
     </LinearGradient>
   );
 }
@@ -1400,6 +1555,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     marginBottom: 20,
   },
+  feedbackCard: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(0, 212, 255, 0.12)',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 212, 255, 0.25)',
+    gap: 10,
+    alignItems: 'flex-start',
+  },
+  feedbackText: {
+    color: '#fff',
+    fontSize: 13,
+    flex: 1,
+    lineHeight: 18,
+  },
   tipsTitle: {
     fontSize: 18,
     fontWeight: 'bold',
@@ -1432,6 +1604,50 @@ const styles = StyleSheet.create({
     marginTop: 40,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
+  },
+  calendarOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+  },
+  calendarContainer: {
+    marginHorizontal: 20,
+    backgroundColor: '#1a0d8d',
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  calendarHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.05)'
+  },
+  calendarTitle: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  calendarActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    padding: 12,
+  },
+  calendarActionButton: {
+    flex: 1,
+    padding: 12,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    alignItems: 'center',
+    marginHorizontal: 6,
+  },
+  calendarActionConfirm: {
+    backgroundColor: '#00d4ff',
+  },
+  calendarActionText: {
+    color: '#fff',
+    fontWeight: '700',
   },
   modalHeader: {
     flexDirection: 'row',
