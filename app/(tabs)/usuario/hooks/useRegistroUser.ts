@@ -8,7 +8,7 @@ import API_URL from '../../../../conf/api'; // ajuste o caminho conforme a pasta
 
 type RootStackParamList = {
   Login: undefined;
-  CadastroAtendimento: undefined;
+  RegistroSuccess: undefined;
 };
 
 export const useRegistroUser = () => {
@@ -27,8 +27,8 @@ const handleRegister = async (photo: string | null) => {
     return;
   }
 
-  if (!photo) {
-    Alert.alert('Erro', 'Por favor, selecione uma foto.');
+  if (!isEmailValid(email)) {
+    Alert.alert('Erro', 'Por favor, insira um e-mail válido.');
     return;
   }
 
@@ -43,29 +43,27 @@ const handleRegister = async (photo: string | null) => {
     const emailExistente = usuarios.find((u: any) => u.email === email);
 
     if (emailExistente) {
-      Alert.alert('Erro', 'Este e-mail já está cadastrado.');
       setLoading(false);
+      Alert.alert('Erro', 'Este e-mail já está cadastrado.');
       return;
     }
-// Validação do formato do e-mail
-  if (!isEmailValid(email)) {
-    Alert.alert('Erro', 'Por favor, insira um e-mail válido.');
-    return;
-  }
+
     // 3. Preparar o FormData com a foto e os dados
     const formData = new FormData();
-    const filename = photo.split('/').pop() || 'foto.jpg';
-    const fileType = filename.split('.').pop();
+    const filename = photo ? photo.split('/').pop() || 'foto.jpg' : 'foto.jpg';
+    const fileType = filename.split('.').pop() || 'jpg';
 
     formData.append('nome', name);
     formData.append('email', email);
     formData.append('senha', password);
     formData.append('tipoUsuario', '1'); // Cliente
-    formData.append('foto', {
-      uri: photo,
-      name: filename,
-      type: `image/${fileType}`,
-    } as any);
+    if (photo) {
+      formData.append('foto', {
+        uri: photo,
+        name: filename,
+        type: `image/${fileType}`,
+      } as any);
+    }
 
     // 4. Enviar os dados para o backend
     const response = await axios.post(`${API_URL}/usuario/inserir`, formData, {
@@ -74,13 +72,10 @@ const handleRegister = async (photo: string | null) => {
       },
     });
 
-    if (response.status === 201) {
-      setVisibleSnackbar(true);
-      setTimeout(() => {
-        navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
-      }, 1000);
+    if (response.status >= 200 && response.status < 300) {
+      navigation.reset({ index: 0, routes: [{ name: 'RegistroSuccess' }] });
     } else {
-      Alert.alert('Erro', response.data.error || 'Não foi possível criar a conta.');
+      Alert.alert('Erro', response.data?.error || 'Não foi possível criar a conta.');
     }
   } catch (error) {
     console.error('Erro ao cadastrar usuário:', error);

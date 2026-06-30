@@ -16,6 +16,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import LoginScreen from '../(tabs)/usuario/Login';
 import RegistroUser from '../(tabs)/usuario/RegistroUser';
+import RegistroSuccess from '../(tabs)/usuario/RegistroSuccess';
 
 import HomeScreen from './screens/HomeScreen';
 import AboutCompanyScreen from './screens/AboutCompanyScreen';
@@ -316,6 +317,7 @@ export default function RootStack() {
     >
       <Stack.Screen name="Login" component={LoginScreen} />
       <Stack.Screen name="RegistroUser" component={RegistroUser} />
+      <Stack.Screen name="RegistroSuccess" component={RegistroSuccess} />
       <Stack.Screen name="Main" component={DrawerLayout} />
     </Stack.Navigator>
   );
