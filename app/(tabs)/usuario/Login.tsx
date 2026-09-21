@@ -16,6 +16,8 @@ import { StackNavigationProp } from '@react-navigation/stack';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import axios from 'axios';
+import API_URL from '../../../conf/api';
 
 const { width } = Dimensions.get('window');
 
@@ -31,6 +33,7 @@ export default function LoginScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [visibleSnackbar, setVisibleSnackbar] = useState(false);
+  const [loginError, setLoginError] = useState('');
 
   const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
 
@@ -52,51 +55,55 @@ export default function LoginScreen() {
   const handleLoginPress = async () => {
     // Validação básica dos campos
     if (!email.trim()) {
-      Alert.alert('Erro', 'Por favor, informe seu e-mail');
+      setLoginError('Por favor, informe seu e-mail.');
       return;
     }
     if (!senha.trim()) {
-      Alert.alert('Erro', 'Por favor, informe sua senha');
+      setLoginError('Por favor, informe sua senha.');
       return;
     }
 
     setLoading(true);
+    setLoginError('');
 
-    // Simula um delay de rede
-    setTimeout(async () => {
-      try {
-        // 🔥 ACEITA QUALQUER EMAIL E SENHA 🔥
-        // Salva dados mockados do usuário no AsyncStorage
-        const userData = {
-          email: email,
-          nome: email.split('@')[0] || 'Usuário',
-          userType: '1', // 1 = Cliente | 0 = Administrador
-          foto: null,
-        };
+    try {
+      const response = await axios.post(`${API_URL}/usuarios/login`, { email: email.trim(), senha }, { timeout: 10000 });
+      const { usuario, token } = response.data;
 
-        await AsyncStorage.multiSet([
-          ['userEmail', email],
-          ['userType', '1'],
-          ['userId', `user-${Date.now()}`],
-          ['nome', userData.nome],
-          ['userData', JSON.stringify(userData)],
-          ['lastUserDataUpdate', Date.now().toString()],
-        ]);
+      await AsyncStorage.multiSet([
+        ['token', token],
+        ['userEmail', usuario.email],
+        ['userType', String(usuario.tipoUsuario)],
+        ['userId', String(usuario.id)],
+        ['nome', usuario.nome],
+        ['userPhoto', usuario.foto || ''],
+        ['userData', JSON.stringify(usuario)],
+        ['lastUserDataUpdate', Date.now().toString()],
+      ]);
 
-        setLoading(false);
-        setVisibleSnackbar(true);
+      setVisibleSnackbar(true);
+      setTimeout(() => navigation.replace('Main'), 500);
+    } catch (error: any) {
+      let message = 'Não foi possível fazer login.';
 
-        // Aguarda o snackbar e navega para o Drawer principal
-        setTimeout(() => {
-          navigation.replace('Main'); // ← Redireciona para o Drawer
-        }, 500);
-
-      } catch (error) {
-        console.error('Erro ao salvar dados:', error);
-        setLoading(false);
-        Alert.alert('Erro', 'Falha ao fazer login. Tente novamente.');
+      if (axios.isAxiosError(error)) {
+        if (error.response?.status === 401) {
+          message = 'E-mail ou senha inválidos.';
+        } else if (error.response?.status === 400) {
+          message = error.response.data?.erro || 'Preencha e-mail e senha.';
+        } else if (error.code === 'ECONNABORTED') {
+          message = 'O servidor demorou para responder.';
+        } else if (!error.response) {
+          message = 'Não foi possível conectar ao servidor.';
+        } else {
+          message = error.response.data?.erro || message;
+        }
       }
-    }, 1000);
+
+      setLoginError(message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -148,7 +155,10 @@ export default function LoginScreen() {
             <TextInput
               label="E-mail"
               value={email}
-              onChangeText={setEmail}
+              onChangeText={(value) => {
+                setEmail(value);
+                setLoginError('');
+              }}
               style={styles.input}
               autoCapitalize="none"
               keyboardType="email-address"
@@ -169,7 +179,10 @@ export default function LoginScreen() {
             <TextInput
               label="Senha"
               value={senha}
-              onChangeText={setSenha}
+              onChangeText={(value) => {
+                setSenha(value);
+                setLoginError('');
+              }}
               secureTextEntry={!showPassword}
               style={styles.input}
               mode="outlined"
@@ -192,6 +205,12 @@ export default function LoginScreen() {
                 },
               }}
             />
+
+            {loginError ? (
+              <Text style={styles.loginError} accessibilityRole="alert">
+                {loginError}
+              </Text>
+            ) : null}
 
             <TouchableOpacity 
               style={styles.forgotPassword}
@@ -356,6 +375,13 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.05)',
     marginBottom: 16,
     borderRadius: 8,
+  },
+  loginError: {
+    color: '#ffb4ab',
+    fontSize: 13,
+    marginTop: -6,
+    marginBottom: 16,
+    textAlign: 'center',
   },
   forgotPassword: {
     alignSelf: 'flex-end',

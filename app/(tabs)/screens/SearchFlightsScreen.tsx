@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   View,
   Text,
@@ -19,6 +20,8 @@ import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Calendar } from 'react-native-calendars';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import axios from 'axios';
+import API_URL from '../../../conf/api';
 import * as Notifications from 'expo-notifications';
 
 // Configurar notificações
@@ -151,6 +154,8 @@ export default function SearchFlightsScreen() {
   const [scheduledFlights, setScheduledFlights] = useState<ScheduledFlight[]>([]);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [selectedFlight, setSelectedFlight] = useState<FlightResult | null>(null);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [notificationDate, setNotificationDate] = useState(new Date());
   const [notificationTime, setNotificationTime] = useState(new Date());
   const [showScheduleDatePicker, setShowScheduleDatePicker] = useState(false);
@@ -160,13 +165,18 @@ export default function SearchFlightsScreen() {
 
   // Sua chave API - AviationStack
   const API_KEY = 'a2d0dcf6a549d01b4c120b13080078ba';
-  const API_URL = 'https://api.aviationstack.com/v1/flights';
+  const FLIGHTS_API_URL = 'https://api.aviationstack.com/v1/flights';
 
   // Carregar voos agendados ao iniciar
   useEffect(() => {
-    loadScheduledFlights();
     requestNotificationPermission();
   }, []);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      loadScheduledFlights();
+    }, [])
+  );
 
   // Verificar notificações agendadas periodicamente
   useEffect(() => {
@@ -200,6 +210,36 @@ export default function SearchFlightsScreen() {
 
   const loadScheduledFlights = async () => {
     try {
+      const token = await AsyncStorage.getItem('token');
+      if (token) {
+        const response = await axios.get(`${API_URL}/agendamentos`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const apiFlights: ScheduledFlight[] = response.data
+          .filter((reservation: any) => !['cancelada', 'finalizada'].includes(reservation.status))
+          .flatMap((reservation: any) =>
+          (reservation.notificacoes || []).map((notification: any) => ({
+            id: String(notification.id),
+            flight: {
+              flight_date: reservation.dataIda,
+              departure: { airport: reservation.aeroporto, iata: reservation.origem },
+              arrival: { airport: reservation.destino, iata: reservation.destino },
+              airline: { name: reservation.empresaVoo || 'Companhia Aérea' },
+              flight: { iata: reservation.aeroporto || 'N/A', number: reservation.aeroporto || 'N/A' },
+            } as FlightResult,
+            departureCode: reservation.origem,
+            arrivalCode: reservation.destino,
+            notificationDate: new Date(`${notification.dataNotificacao}T${notification.horario}`),
+            notificationTime: new Date(`${notification.dataNotificacao}T${notification.horario}`),
+            isActive: notification.ativo,
+            createdAt: new Date(),
+          }))
+        );
+        setScheduledFlights(apiFlights);
+        await AsyncStorage.removeItem('scheduledFlights');
+        return;
+      }
+
       const stored = await AsyncStorage.getItem('scheduledFlights');
       if (stored) {
         const parsed = JSON.parse(stored);
@@ -319,8 +359,53 @@ const scheduleNotification = async (flight: ScheduledFlight) => {
   const addScheduledFlight = async () => {
     if (!selectedFlight) return;
 
+      setScheduleLoading(true);
+      setScheduleError(null);
+      const token = await AsyncStorage.getItem('token');
+      if (!token) {
+        setScheduleError('Faça login para salvar uma reserva.');
+        setScheduleLoading(false);
+        return;
+      }
+
+      const flightDate = selectedFlight.flight_date || formatDateForAPI(departureDate);
+      let reservation;
+
+      try {
+        const response = await axios.post(`${API_URL}/agendamentos`, {
+          origem: departure?.code,
+          destino: arrival?.code,
+          dataIda: flightDate,
+          dataVolta: tripType === 'roundtrip' ? formatDateForAPI(returnDate) : null,
+          passageiros: passengers,
+          aeroporto: selectedFlight.departure?.airport || departure?.code,
+          empresaVoo: selectedFlight.airline?.name || null,
+          status: 'pendente',
+        }, {
+          headers: { Authorization: `Bearer ${token}` },
+          timeout: 10000,
+        });
+        reservation = response.data;
+      } catch (error: any) {
+        console.error('Erro ao criar reserva:', error.response?.data || error.message || error);
+        let message = 'Não foi possível salvar a reserva.';
+        if (error.response?.status === 401) {
+          await AsyncStorage.multiRemove(['token', 'userType', 'userId', 'userEmail', 'nome', 'userData']);
+          message = 'Sua sessão expirou. Faça login novamente para agendar o voo.';
+        } else if (error.response?.data?.erro) {
+          message = error.response.data.erro;
+        } else if (error.code === 'ECONNABORTED') {
+          message = 'O servidor demorou para responder. Verifique se o backend está ativo.';
+        } else if (!error.response) {
+          message = `Não foi possível conectar à API em ${API_URL}.`;
+        }
+        setScheduleError(message);
+        setScheduleLoading(false);
+        return;
+      }
+
     const newScheduled: ScheduledFlight = {
-      id: `${selectedFlight.flight?.number || 'flight'}-${Date.now()}`,
+        id: String(reservation.id || `${selectedFlight.flight?.number || 'flight'}-${Date.now()}`),
       flight: selectedFlight,
       departureCode: departure?.code || 'N/A',
       arrivalCode: arrival?.code || 'N/A',
@@ -330,49 +415,86 @@ const scheduleNotification = async (flight: ScheduledFlight) => {
       createdAt: new Date(),
     };
 
-    const updatedList = [...scheduledFlights, newScheduled];
+    let notification;
+    try {
+      const notificationResponse = await axios.post(`${API_URL}/agendamentos/${reservation.id}/notificacoes`, {
+        dataNotificacao: formatDateForAPI(notificationDate),
+        horario: notificationTime.toTimeString().slice(0, 8),
+        ativo: true,
+      }, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      notification = notificationResponse.data;
+    } catch (error: any) {
+      setScheduleError('A reserva foi criada, mas não foi possível salvar o aviso.');
+      setScheduleLoading(false);
+      return;
+    }
+
+    const scheduledFlight = {
+      ...newScheduled,
+      id: String(notification.id),
+    };
+    const updatedList = [...scheduledFlights, scheduledFlight];
     setScheduledFlights(updatedList);
     await saveScheduledFlights(updatedList);
-    await scheduleNotification(newScheduled);
+    await scheduleNotification(scheduledFlight);
 
     setShowScheduleModal(false);
     setSelectedFlight(null);
+    setScheduleLoading(false);
+    setScheduleError(null);
 
     Alert.alert(
-      '✅ Voo Agendado!',
-      `Você receberá uma notificação em ${notificationDate.toLocaleDateString('pt-BR')} às ${notificationTime.toLocaleTimeString('pt-BR')}`,
+      'Voo reservado!',
+      `Reserva criada. Você receberá uma notificação em ${notificationDate.toLocaleDateString('pt-BR')} às ${notificationTime.toLocaleTimeString('pt-BR')}`,
       [{ text: 'OK' }]
     );
   };
 
   const removeScheduledFlight = async (id: string) => {
-    Alert.alert(
-      'Remover agendamento',
-      'Tem certeza que deseja remover este agendamento?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Remover',
-          style: 'destructive',
-          onPress: async () => {
-            const updatedList = scheduledFlights.filter(f => f.id !== id);
-            setScheduledFlights(updatedList);
-            await saveScheduledFlights(updatedList);
-          },
-        },
-      ]
-    );
+    const previousList = scheduledFlights;
+    const updatedList = previousList.filter(flight => flight.id !== id);
+    setScheduledFlights(updatedList);
+
+    const token = await AsyncStorage.getItem('token');
+    if (!token) {
+      await saveScheduledFlights(updatedList);
+      return;
+    }
+
+    try {
+      await axios.delete(`${API_URL}/agendamentos/notificacoes/${id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch (error: any) {
+      if (error.response?.status !== 404) {
+        setScheduledFlights(previousList);
+        Alert.alert('Erro', error.response?.data?.erro || 'Não foi possível remover o agendamento.');
+      }
+    }
   };
 
   const toggleScheduledFlight = async (id: string) => {
-    const updatedList = scheduledFlights.map(f => {
-      if (f.id === id) {
-        return { ...f, isActive: !f.isActive };
+    const currentFlight = scheduledFlights.find(flight => flight.id === id);
+    if (!currentFlight) return;
+    const active = !currentFlight.isActive;
+    const token = await AsyncStorage.getItem('token');
+
+    try {
+      if (token) {
+        await axios.patch(`${API_URL}/agendamentos/notificacoes/${id}`, { ativo: active }, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
       }
-      return f;
-    });
-    setScheduledFlights(updatedList);
-    await saveScheduledFlights(updatedList);
+      const updatedList = scheduledFlights.map(flight =>
+        flight.id === id ? { ...flight, isActive: active } : flight
+      );
+      setScheduledFlights(updatedList);
+      await saveScheduledFlights(updatedList);
+    } catch (error: any) {
+      Alert.alert('Erro', error.response?.data?.erro || 'Não foi possível alterar o agendamento.');
+    }
   };
 
   const searchFlights = async (page: number = 1, isLoadMore: boolean = false) => {
@@ -400,7 +522,7 @@ const scheduleNotification = async (flight: ScheduledFlight) => {
       const dateParam = formatDateForAPI(departureDate);
       const offset = (page - 1) * ITEMS_PER_PAGE;
       
-      const url = `${API_URL}?access_key=${API_KEY}&dep_iata=${departure.code}&arr_iata=${arrival.code}&date=${dateParam}&limit=${ITEMS_PER_PAGE}&offset=${offset}`;
+      const url = `${FLIGHTS_API_URL}?access_key=${API_KEY}&dep_iata=${departure.code}&arr_iata=${arrival.code}&date=${dateParam}&limit=${ITEMS_PER_PAGE}&offset=${offset}`;
 
       console.log(`🌐 Buscando voos - Página ${page}:`, url);
 
@@ -669,6 +791,8 @@ const scheduleNotification = async (flight: ScheduledFlight) => {
             setSelectedFlight(item);
             setNotificationDate(new Date());
             setNotificationTime(new Date(Date.now() + 3600000));
+            setScheduleError(null);
+            setScheduleLoading(false);
             setShowScheduleModal(true);
           }}
         >
@@ -1179,7 +1303,10 @@ const scheduleNotification = async (flight: ScheduledFlight) => {
               </View>
 
               {selectedFlight && (
-                <View style={styles.scheduleContent}>
+                <ScrollView
+                  contentContainerStyle={styles.scheduleContent}
+                  showsVerticalScrollIndicator={false}
+                >
                   <View style={styles.scheduleFlightInfo}>
                     <Text style={styles.scheduleFlightTitle}>
                       {selectedFlight.airline?.name || 'Companhia Aérea'}
@@ -1188,9 +1315,75 @@ const scheduleNotification = async (flight: ScheduledFlight) => {
                       Voo {selectedFlight.flight?.iata || selectedFlight.flight?.number || 'N/A'}
                     </Text>
                     <Text style={styles.scheduleRoute}>
-                      {departure?.code || 'N/A'} → {arrival?.code || 'N/A'}
+                      {selectedFlight.departure?.iata || departure?.code || 'N/A'} → {selectedFlight.arrival?.iata || arrival?.code || 'N/A'}
                     </Text>
                   </View>
+
+                  <View style={styles.scheduleStatusRow}>
+                    <View style={styles.scheduleStatusBadge}>
+                      <MaterialIcons
+                        name={getFlightStatus(selectedFlight.flight_status).icon as any}
+                        size={16}
+                        color={getFlightStatus(selectedFlight.flight_status).color}
+                      />
+                      <Text
+                        style={[
+                          styles.scheduleStatusText,
+                          { color: getFlightStatus(selectedFlight.flight_status).color },
+                        ]}
+                      >
+                        {getFlightStatus(selectedFlight.flight_status).text}
+                      </Text>
+                    </View>
+                    <Text style={styles.scheduleFlightDate}>
+                      {selectedFlight.flight_date
+                        ? new Date(selectedFlight.flight_date).toLocaleDateString('pt-BR')
+                        : 'Data não informada'}
+                    </Text>
+                  </View>
+
+                  <View style={styles.scheduleRouteDetails}>
+                    <View style={styles.scheduleAirportDetails}>
+                      <Text style={styles.scheduleDetailsLabel}>Partida</Text>
+                      <Text style={styles.scheduleDetailsTime}>
+                        {selectedFlight.departure?.scheduled
+                          ? formatDateTime(selectedFlight.departure.scheduled)
+                          : 'Horário não informado'}
+                      </Text>
+                      <Text style={styles.scheduleDetailsAirport}>
+                        {selectedFlight.departure?.airport || 'Aeroporto não informado'}
+                      </Text>
+                      <Text style={styles.scheduleDetailsMeta}>
+                        Terminal {selectedFlight.departure?.terminal || 'N/I'} · Portão {selectedFlight.departure?.gate || 'N/I'}
+                      </Text>
+                    </View>
+
+                    <MaterialIcons name="arrow-forward" size={22} color="#00d4ff" />
+
+                    <View style={[styles.scheduleAirportDetails, styles.scheduleAirportDetailsRight]}>
+                      <Text style={styles.scheduleDetailsLabel}>Chegada</Text>
+                      <Text style={styles.scheduleDetailsTime}>
+                        {selectedFlight.arrival?.scheduled
+                          ? formatDateTime(selectedFlight.arrival.scheduled)
+                          : 'Horário não informado'}
+                      </Text>
+                      <Text style={styles.scheduleDetailsAirport}>
+                        {selectedFlight.arrival?.airport || 'Aeroporto não informado'}
+                      </Text>
+                      <Text style={styles.scheduleDetailsMeta}>
+                        Terminal {selectedFlight.arrival?.terminal || 'N/I'} · Portão {selectedFlight.arrival?.gate || 'N/I'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {(selectedFlight.departure?.delay > 0 || selectedFlight.arrival?.delay > 0) && (
+                    <View style={styles.scheduleDelay}>
+                      <MaterialIcons name="warning" size={16} color="#ff9800" />
+                      <Text style={styles.scheduleDelayText}>
+                        Atraso: partida {selectedFlight.departure?.delay || 0} min · chegada {selectedFlight.arrival?.delay || 0} min
+                      </Text>
+                    </View>
+                  )}
 
                   <View style={styles.scheduleDivider} />
 
@@ -1220,6 +1413,10 @@ const scheduleNotification = async (flight: ScheduledFlight) => {
                     </TouchableOpacity>
                   </View>
 
+                  {scheduleError ? (
+                    <Text style={styles.scheduleError}>{scheduleError}</Text>
+                  ) : null}
+
                   <View style={styles.scheduleActions}>
                     <TouchableOpacity
                       style={[styles.scheduleActionButton, styles.scheduleCancelButton]}
@@ -1229,14 +1426,21 @@ const scheduleNotification = async (flight: ScheduledFlight) => {
                     </TouchableOpacity>
 
                     <TouchableOpacity
-                      style={[styles.scheduleActionButton, styles.scheduleConfirmButton]}
+                      style={[styles.scheduleActionButton, styles.scheduleConfirmButton, scheduleLoading && styles.scheduleConfirmButtonDisabled]}
                       onPress={addScheduledFlight}
+                      disabled={scheduleLoading}
                     >
-                      <MaterialIcons name="check" size={20} color="#fff" />
-                      <Text style={styles.scheduleConfirmText}>Agendar</Text>
+                      {scheduleLoading ? (
+                        <ActivityIndicator color="#fff" size="small" />
+                      ) : (
+                        <>
+                          <MaterialIcons name="check" size={20} color="#fff" />
+                          <Text style={styles.scheduleConfirmText}>Agendar</Text>
+                        </>
+                      )}
                     </TouchableOpacity>
                   </View>
-                </View>
+                </ScrollView>
               )}
             </View>
           </View>
@@ -1942,6 +2146,75 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginBottom: 4,
   },
+  scheduleStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  scheduleStatusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    gap: 5,
+  },
+  scheduleStatusText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  scheduleFlightDate: {
+    color: '#9ab8d9',
+    fontSize: 12,
+  },
+  scheduleRouteDetails: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 16,
+  },
+  scheduleAirportDetails: {
+    flex: 1,
+  },
+  scheduleAirportDetailsRight: {
+    alignItems: 'flex-end',
+  },
+  scheduleDetailsLabel: {
+    color: '#9ab8d9',
+    fontSize: 12,
+    marginBottom: 4,
+  },
+  scheduleDetailsTime: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  scheduleDetailsAirport: {
+    color: '#fff',
+    fontSize: 12,
+    marginTop: 3,
+  },
+  scheduleDetailsMeta: {
+    color: '#9ab8d9',
+    fontSize: 10,
+    marginTop: 3,
+  },
+  scheduleDelay: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 152, 0, 0.12)',
+    borderRadius: 8,
+    padding: 10,
+    gap: 8,
+    marginBottom: 16,
+  },
+  scheduleDelayText: {
+    color: '#ffcc80',
+    flex: 1,
+    fontSize: 12,
+  },
   scheduleRoute: {
     color: '#00d4ff',
     fontSize: 16,
@@ -1977,6 +2250,13 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
   },
+  scheduleError: {
+    color: '#ffb4ab',
+    fontSize: 13,
+    marginTop: -12,
+    marginBottom: 16,
+    textAlign: 'center',
+  },
   scheduleActions: {
     flexDirection: 'row',
     gap: 12,
@@ -2000,6 +2280,9 @@ const styles = StyleSheet.create({
   },
   scheduleConfirmButton: {
     backgroundColor: '#00d4ff',
+  },
+  scheduleConfirmButtonDisabled: {
+    opacity: 0.6,
   },
   scheduleConfirmText: {
     color: '#fff',

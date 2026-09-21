@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert } from 'react-native';
+import { Alert, Platform } from 'react-native';
 import axios from 'axios';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -35,20 +35,7 @@ const handleRegister = async (photo: string | null) => {
   setLoading(true);
 
   try {
-    // 1. Buscar todos os usuários
-    const usuariosResponse = await axios.get(`${API_URL}/usuarios`);
-    const usuarios = usuariosResponse.data;
-
-    // 2. Verificar se já existe um usuário com o mesmo e-mail
-    const emailExistente = usuarios.find((u: any) => u.email === email);
-
-    if (emailExistente) {
-      setLoading(false);
-      Alert.alert('Erro', 'Este e-mail já está cadastrado.');
-      return;
-    }
-
-    // 3. Preparar o FormData com a foto e os dados
+    // A API valida unicidade do e-mail e retorna 409 quando necessário.
     const formData = new FormData();
     const filename = photo ? photo.split('/').pop() || 'foto.jpg' : 'foto.jpg';
     const fileType = filename.split('.').pop() || 'jpg';
@@ -58,11 +45,18 @@ const handleRegister = async (photo: string | null) => {
     formData.append('senha', password);
     formData.append('tipoUsuario', '1'); // Cliente
     if (photo) {
-      formData.append('foto', {
-        uri: photo,
-        name: filename,
-        type: `image/${fileType}`,
-      } as any);
+      if (Platform.OS === 'web') {
+        const imageResponse = await fetch(photo);
+        const imageBlob = await imageResponse.blob();
+        const blobExtension = imageBlob.type.split('/')[1] || fileType;
+        formData.append('foto', imageBlob, `foto-${Date.now()}.${blobExtension === 'jpeg' ? 'jpg' : blobExtension}`);
+      } else {
+        formData.append('foto', {
+          uri: photo,
+          name: filename,
+          type: `image/${fileType}`,
+        } as any);
+      }
     }
 
     // 4. Enviar os dados para o backend
@@ -70,6 +64,7 @@ const handleRegister = async (photo: string | null) => {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
+      timeout: 10000,
     });
 
     if (response.status >= 200 && response.status < 300) {
@@ -77,9 +72,12 @@ const handleRegister = async (photo: string | null) => {
     } else {
       Alert.alert('Erro', response.data?.error || 'Não foi possível criar a conta.');
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error('Erro ao cadastrar usuário:', error);
-    Alert.alert('Erro', 'Falha ao conectar ao servidor.');
+    const message = error.code === 'ECONNABORTED'
+      ? 'O servidor demorou para responder. Verifique se o back-end está rodando.'
+      : error.response?.data?.erro || 'Falha ao conectar ao servidor.';
+    Alert.alert('Erro', message);
   } finally {
     setLoading(false);
   }

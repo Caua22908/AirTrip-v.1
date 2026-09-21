@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   View,
   Text,
@@ -13,6 +14,8 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons, FontAwesome5 } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import axios from 'axios';
+import API_URL from '../../../conf/api';
 
 const { width } = Dimensions.get('window');
 
@@ -43,12 +46,39 @@ export default function MinhasReservasScreen() {
   const [filter, setFilter] = useState<'todas' | 'confirmada' | 'pendente' | 'cancelada' | 'finalizada'>('todas');
 
   // Carregar reservas do AsyncStorage
-  useEffect(() => {
-    loadReservations();
-  }, []);
+  useFocusEffect(
+    React.useCallback(() => {
+      loadReservations();
+    }, [])
+  );
 
   const loadReservations = async () => {
     try {
+      const token = await AsyncStorage.getItem('token');
+      if (token) {
+        const response = await axios.get(`${API_URL}/agendamentos`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const apiReservations: Reservation[] = response.data.map((item: any) => ({
+          id: String(item.id),
+          flightNumber: item.aeroporto || 'Voo AirTrip',
+          airline: item.empresaVoo || 'Companhia não informada',
+          departureCode: item.origem,
+          arrivalCode: item.destino,
+          departureCity: item.origem,
+          arrivalCity: item.destino,
+          departureTime: '--:--',
+          arrivalTime: '--:--',
+          departureDate: item.dataIda,
+          status: item.status,
+          passengerName: 'Reserva AirTrip',
+          passengerCount: item.passageiros,
+          createdAt: item.dataIda,
+        }));
+        setReservations(apiReservations);
+        return;
+      }
+
       const stored = await AsyncStorage.getItem('reservations');
       if (stored) {
         const parsed = JSON.parse(stored);
@@ -165,28 +195,48 @@ export default function MinhasReservasScreen() {
   };
 
   // Cancelar reserva
-  const cancelReservation = (id: string) => {
-    Alert.alert(
-      'Cancelar Reserva',
-      'Tem certeza que deseja cancelar esta reserva?',
-      [
-        { text: 'Não', style: 'cancel' },
-        {
-          text: 'Sim, Cancelar',
-          style: 'destructive',
-          onPress: () => {
-            const updatedReservations = reservations.map(res =>
-              res.id === id
-                ? { ...res, status: 'cancelada' as const }
-                : res
-            );
-            setReservations(updatedReservations);
-            saveReservations(updatedReservations);
-            Alert.alert('Cancelado', 'Reserva cancelada com sucesso!');
-          },
-        },
-      ]
+  const cancelReservation = async (id: string) => {
+    const previousReservations = reservations;
+    const updatedReservations = previousReservations.map(res =>
+      res.id === id ? { ...res, status: 'cancelada' as const } : res
     );
+    setReservations(updatedReservations);
+
+    try {
+      const token = await AsyncStorage.getItem('token');
+      if (token) {
+        await axios.patch(`${API_URL}/agendamentos/${id}/cancelar`, {}, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      } else {
+        await saveReservations(updatedReservations);
+      }
+    } catch (error: any) {
+      setReservations(previousReservations);
+      Alert.alert('Erro', error.response?.data?.erro || 'Não foi possível cancelar a reserva.');
+    }
+  };
+
+  const deleteReservation = async (id: string) => {
+    const previousReservations = reservations;
+    const updatedReservations = previousReservations.filter(res => res.id !== id);
+    setReservations(updatedReservations);
+
+    try {
+      const token = await AsyncStorage.getItem('token');
+      if (token) {
+        await axios.delete(`${API_URL}/agendamentos/${id}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      } else {
+        await saveReservations(updatedReservations);
+      }
+    } catch (error: any) {
+      if (error.response?.status !== 404) {
+        setReservations(previousReservations);
+        Alert.alert('Erro', error.response?.data?.erro || 'Não foi possível excluir a reserva.');
+      }
+    }
   };
 
   // Filtrar reservas
@@ -291,6 +341,16 @@ export default function MinhasReservasScreen() {
           >
             <MaterialIcons name="delete-outline" size={18} color="#ff4444" />
             <Text style={styles.cancelButtonText}>Cancelar Reserva</Text>
+          </TouchableOpacity>
+        )}
+
+        {item.status === 'cancelada' && (
+          <TouchableOpacity
+            style={styles.deleteButton}
+            onPress={() => deleteReservation(item.id)}
+          >
+            <MaterialIcons name="delete-forever" size={18} color="#ff4444" />
+            <Text style={styles.deleteButtonText}>Excluir Reserva</Text>
           </TouchableOpacity>
         )}
       </LinearGradient>
@@ -599,6 +659,21 @@ const styles = StyleSheet.create({
     color: '#ff4444',
     fontSize: 13,
     fontWeight: '500',
+  },
+  deleteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 68, 68, 0.2)',
+    gap: 6,
+  },
+  deleteButtonText: {
+    color: '#ff4444',
+    fontSize: 13,
+    fontWeight: '700',
   },
   emptyState: {
     alignItems: 'center',

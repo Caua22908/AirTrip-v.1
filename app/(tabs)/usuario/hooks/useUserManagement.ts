@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { Alert } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import API_URL from '../../../../conf/api'; // ajuste o caminho conforme a pasta
 
 interface User {
@@ -100,7 +101,10 @@ const useUserManagement = () => {
 
   const fetchUsers = async () => {
     try {
-      const response = await axios.get(`${API_URL}/usuarios`);
+      const token = await AsyncStorage.getItem('token');
+      const response = await axios.get(`${API_URL}/usuarios`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       setUsers(response.data);
     } catch (error) {
       console.error('Error fetching users:', (error as Error).message);
@@ -205,12 +209,13 @@ const useUserManagement = () => {
       }
 
       // URL corrigida
-      const url = `${API_URL}/usuarios/atualizar/${currentUser.id}`;
+      const url = `${API_URL}/usuarios/${currentUser.id}`;
       console.log('URL da requisição:', url);
 
       await axios.put(url, formData, {
         headers: {
-          'Content-Type': 'multipart/form-data'
+          'Content-Type': 'multipart/form-data',
+          Authorization: `Bearer ${await AsyncStorage.getItem('token')}`,
         }
       });
 
@@ -238,7 +243,9 @@ const useUserManagement = () => {
   const deleteUser = async () => {
     if (currentUser?.id) {
       try {
-        await axios.delete(`${API_URL}/usuario/deletar/${currentUser.id}`);
+        await axios.delete(`${API_URL}/usuario/${currentUser.id}`, {
+          headers: { Authorization: `Bearer ${await AsyncStorage.getItem('token')}` },
+        });
         setCurrentUser(null);
         hideModal('deleteUser');
         fetchUsers();

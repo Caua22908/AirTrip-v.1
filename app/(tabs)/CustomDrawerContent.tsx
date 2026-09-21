@@ -16,8 +16,11 @@ import {
   ActivityIndicator,
   AppState,
   AppStateStatus,
+  Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import axios from 'axios';
+import * as ImagePicker from 'expo-image-picker';
 import { useDrawerStatus } from '@react-navigation/drawer';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons, FontAwesome5 } from '@expo/vector-icons';
@@ -36,6 +39,8 @@ const CustomDrawerContent: React.FC<DrawerContentComponentProps> = (props) => {
   const [nome, setNome] = useState<string | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
   const [nomeEditado, setNomeEditado] = useState('');
+  const [emailEditado, setEmailEditado] = useState('');
+  const [fotoEditada, setFotoEditada] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [photoVersion, setPhotoVersion] = useState(0);
   const [lastUpdate, setLastUpdate] = useState<number>(Date.now());
@@ -115,6 +120,7 @@ const CustomDrawerContent: React.FC<DrawerContentComponentProps> = (props) => {
     try {
       // Limpa todos os dados do usuário
       await AsyncStorage.multiRemove([
+        'token',
         'userEmail',
         'userType',
         'userPhoto',
@@ -160,7 +166,7 @@ const CustomDrawerContent: React.FC<DrawerContentComponentProps> = (props) => {
 
   // Atualização periódica a cada 30 segundos
   useEffect(() => {
-    let interval: NodeJS.Timeout;
+    let interval: ReturnType<typeof setInterval>;
     
     if (isDrawerOpen === 'open') {
       interval = setInterval(() => {
@@ -230,21 +236,89 @@ const CustomDrawerContent: React.FC<DrawerContentComponentProps> = (props) => {
   };
 
   const handleSalvarEdicao = async () => {
-    if (!nomeEditado.trim()) {
+    if (!nomeEditado.trim() || !emailEditado.trim() || !userId) {
       return;
     }
     
     try {
-      await AsyncStorage.setItem('nome', nomeEditado);
-      setNome(nomeEditado);
+      setLoading(true);
+      const token = await AsyncStorage.getItem('token');
+      const formData = new FormData();
+      formData.append('nome', nomeEditado.trim());
+      formData.append('email', emailEditado.trim());
+
+      if (fotoEditada) {
+        const filename = fotoEditada.split('/').pop() || 'foto.jpg';
+        const extension = filename.split('.').pop()?.toLowerCase() || 'jpg';
+        const mimeType = `image/${extension === 'jpg' ? 'jpeg' : extension}`;
+
+        if (Platform.OS === 'web') {
+          const imageResponse = await fetch(fotoEditada);
+          const imageBlob = await imageResponse.blob();
+          const blobExtension = imageBlob.type.split('/')[1] || extension;
+          const webFilename = `foto-${Date.now()}.${blobExtension === 'jpeg' ? 'jpg' : blobExtension}`;
+          formData.append('foto', imageBlob, webFilename);
+        } else {
+          formData.append('foto', {
+            uri: fotoEditada,
+            name: filename,
+            type: mimeType,
+          } as any);
+        }
+      }
+
+      const response = await axios.put(`${API_URL}/usuarios/${userId}`, formData, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(Platform.OS === 'web' ? {} : { 'Content-Type': 'multipart/form-data' }),
+        },
+      });
+      const updatedUser = response.data;
+      const photoUrl = updatedUser.foto
+        ? (updatedUser.foto.startsWith('http') ? updatedUser.foto : `${API_URL}${updatedUser.foto}`)
+        : '';
+      await AsyncStorage.multiSet([
+        ['nome', updatedUser.nome],
+        ['userEmail', updatedUser.email],
+        ['userPhoto', photoUrl],
+        ['userData', JSON.stringify({ ...updatedUser, foto: photoUrl })],
+        ['lastUserDataUpdate', Date.now().toString()],
+      ]);
+      setNome(updatedUser.nome);
+      setUser(prev => prev ? { ...prev, email: updatedUser.email, photo: photoUrl, nome: updatedUser.nome } : null);
       setModalVisible(false);
       setNomeEditado('');
-      
-      setUser(prev => prev ? { ...prev, nome: nomeEditado } : null);
-      forcePhotoUpdate();
-    } catch (e) {
-      console.error('Erro ao salvar nome:', e);
+      setEmailEditado('');
+      setFotoEditada(null);
+      setPhotoVersion(prev => prev + 1);
+      setLastUpdate(Date.now());
+    } catch (error: any) {
+      console.error('Erro ao atualizar perfil:', error);
+      const message = error.response?.data?.erro || 'Não foi possível atualizar suas informações.';
+      alert(message);
+    } finally {
+      setLoading(false);
     }
+  };
+
+  const abrirEdicao = () => {
+    setNomeEditado(nome || user?.nome || '');
+    setEmailEditado(user?.email || '');
+    setFotoEditada(null);
+    setModalVisible(true);
+  };
+
+  const escolherFoto = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      alert('Permissão para acessar suas fotos é necessária.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.8,
+    });
+    if (!result.canceled) setFotoEditada(result.assets[0].uri);
   };
 
   // Componente do botão de atualização
@@ -280,8 +354,8 @@ const CustomDrawerContent: React.FC<DrawerContentComponentProps> = (props) => {
           <View style={styles.headerButtons}>
             <TouchableOpacity
               style={styles.editButton}
-              onPress={() => setModalVisible(true)}
-              accessibilityLabel="Editar nome"
+              onPress={abrirEdicao}
+              accessibilityLabel="Editar informações"
             >
               <MaterialIcons name="edit" size={18} color="#00d4ff" />
             </TouchableOpacity>
@@ -379,7 +453,7 @@ const CustomDrawerContent: React.FC<DrawerContentComponentProps> = (props) => {
         </LinearGradient>
       </TouchableOpacity>
 
-      {/* Modal para editar nome */}
+      {/* Modal para editar informações */}
       <Modal
         visible={modalVisible}
         transparent
@@ -387,11 +461,13 @@ const CustomDrawerContent: React.FC<DrawerContentComponentProps> = (props) => {
         onRequestClose={() => {
           setModalVisible(false);
           setNomeEditado('');
+          setEmailEditado('');
+          setFotoEditada(null);
         }}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Editar Nome</Text>
+            <Text style={styles.modalTitle}>Editar Informações</Text>
             <TextInput
               value={nomeEditado}
               onChangeText={setNomeEditado}
@@ -400,12 +476,27 @@ const CustomDrawerContent: React.FC<DrawerContentComponentProps> = (props) => {
               style={styles.input}
               autoFocus
             />
+            <TextInput
+              value={emailEditado}
+              onChangeText={setEmailEditado}
+              placeholder="Digite seu e-mail"
+              placeholderTextColor="#9ab8d9"
+              style={styles.input}
+              autoCapitalize="none"
+              keyboardType="email-address"
+            />
+            <TouchableOpacity style={styles.photoButton} onPress={escolherFoto}>
+              <MaterialIcons name="photo-camera" size={20} color="#00d4ff" />
+              <Text style={styles.photoButtonText}>{fotoEditada ? 'Foto selecionada' : 'Alterar foto'}</Text>
+            </TouchableOpacity>
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={[styles.modalButton, styles.cancelButton]}
                 onPress={() => {
                   setModalVisible(false);
                   setNomeEditado('');
+                  setEmailEditado('');
+                  setFotoEditada(null);
                 }}
               >
                 <Text style={styles.cancelButtonText}>Cancelar</Text>
@@ -627,6 +718,22 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 212, 255, 0.05)',
     color: '#fff',
   },
+  photoButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 212, 255, 0.3)',
+    borderRadius: 10,
+  },
+  photoButtonText: {
+    color: '#00d4ff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
   modalButtons: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -650,16 +757,20 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   saveButtonGradient: {
-    padding: 12,
+    width: '100%',
+    minHeight: 46,
+    paddingHorizontal: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },
   cancelButtonText: {
     color: '#9ab8d9',
+    fontSize: 14,
     fontWeight: '600',
   },
   saveButtonText: {
     color: '#fff',
+    fontSize: 14,
     fontWeight: '600',
   },
 });
